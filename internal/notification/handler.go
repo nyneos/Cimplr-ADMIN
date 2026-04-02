@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Handler exposes notification management endpoints.
 type Handler struct{ pool *pgxpool.Pool }
@@ -60,6 +63,10 @@ func (h *Handler) Resend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OutboxID == "" {
 		writeError(w, http.StatusBadRequest, "validation_error", "outbox_id required")
+		return
+	}
+	if !uuidRe.MatchString(req.OutboxID) {
+		writeError(w, http.StatusBadRequest, "validation_error", "outbox_id must be a valid UUID (get it from the notification/list endpoint)")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

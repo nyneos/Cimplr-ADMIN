@@ -8,24 +8,29 @@ services:
     startCommand: ./CimplrAdmin
     healthCheckPath: /cimplrADMIN/health
     envVars:
+      # ── Database (Supabase) ────────────────────────────────────────────────
       - key: DB_USER
-        sync: false
+        value: postgres.zksyhgkeyisnxwvapxqx
       - key: DB_PASSWORD
-        sync: false
+        value: nyneos123
       - key: DB_HOST
-        sync: false
+        value: aws-1-ap-south-1.pooler.supabase.com
       - key: DB_PORT
         value: "5432"
       - key: DB_NAME
         value: postgres
+      # ── Server ────────────────────────────────────────────────────────────
       - key: PORT
         value: "8080"
+      # ── Master key (bootstrap admin login) ────────────────────────────────
       - key: MASTER_KEY
-        generateValue: true
+        value: changeme-super-secret-master-key
+      # ── Notification service ──────────────────────────────────────────────
       - key: SEND_ENDPOINT_URL
-        sync: false
+        value: https://api-notification-service.nyneos.com/api/v1/send/bulk
       - key: SEND_ENDPOINT_API_KEY
-        sync: false
+        value: "qwertyuiop091105@asdf12jkJHoKL$56hiaJIbhuAHbjnj&@$%VHh="
+      # ── Outbox worker ─────────────────────────────────────────────────────
       - key: OUTBOX_WORKER_ENABLED
         value: "true"
       - key: OUTBOX_WORKER_POLL_SECS
@@ -34,6 +39,7 @@ services:
         value: "50"
       - key: OUTBOX_WORKER_TIMEOUT_SECS
         value: "15"
+      # ── Licence checker ───────────────────────────────────────────────────
       - key: LICENCE_CHECKER_ENABLED
         value: "true"
       - key: LICENCE_CHECKER_POLL_HOURS
