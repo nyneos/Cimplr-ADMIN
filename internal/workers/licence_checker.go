@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"CimplrCorpSaas/admin/internal/access"
 	"CimplrCorpSaas/admin/internal/notification"
 )
 
@@ -136,6 +137,9 @@ func stepGracePeriod(ctx context.Context, pool *pgxpool.Pool) error {
 			 SET status='GRACE', notified_grace=true, updated_at=now()
 			 WHERE licence_id=$1`, l.LicenceID)
 
+		// Push updated licence status to the deployment's own DB.
+		go func(did string) { access.SyncPermissionsToDeployment(context.Background(), pool, did) }(l.DeploymentID) //nolint:errcheck
+
 		companyName, users, err := getDeploymentUsers(ctx, pool, l.DeploymentID)
 		if err != nil {
 			continue
@@ -193,6 +197,9 @@ func stepFullSuspension(ctx context.Context, pool *pgxpool.Pool) error {
 		_, _ = pool.Exec(ctx,
 			`UPDATE admin_svc.deployments SET is_active=false, updated_at=now() WHERE deployment_id=$1`,
 			l.DeploymentID)
+
+		// Push EXPIRED status to the deployment's own DB.
+		go func(did string) { access.SyncPermissionsToDeployment(context.Background(), pool, did) }(l.DeploymentID) //nolint:errcheck
 
 		// Audit
 		_, _ = pool.Exec(ctx,

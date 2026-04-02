@@ -179,10 +179,14 @@ VALUES
   ('DEPLOYMENT_APPROVED',    'EMAIL', 3,  60)
 ON CONFLICT (event_id, channel) DO NOTHING;
 
--- ── CONFIG SCHEMA ─────────────────────────────────────────────────────────────
--- Used to store per-deployment runtime configuration key/value pairs
+-- ── CONFIG SCHEMA (CimplrAdmin DB) ─────────────────────────────────────────
+-- These tables live in the CimplrAdmin database only.
+-- CimplrAdmin pushes a snapshot of these INTO the client deployment's own DB
+-- via the sync worker. The client DB gets its own flat config.permissions and
+-- config.settings tables with NO foreign-key references to admin_svc.
 CREATE SCHEMA IF NOT EXISTS config;
 
+-- Per-deployment runtime settings stored in CimplrAdmin (source of truth)
 CREATE TABLE IF NOT EXISTS config.settings (
     setting_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     deployment_id UUID REFERENCES admin_svc.deployments(deployment_id),
@@ -195,7 +199,7 @@ CREATE TABLE IF NOT EXISTS config.settings (
 );
 CREATE INDEX IF NOT EXISTS idx_config_settings_deployment ON config.settings(deployment_id);
 
--- Global settings (deployment_id IS NULL) vs per-deployment
+-- Global settings (deployment_id IS NULL = applies to all)
 CREATE TABLE IF NOT EXISTS config.global_settings (
     setting_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     key         TEXT NOT NULL UNIQUE,
@@ -204,3 +208,25 @@ CREATE TABLE IF NOT EXISTS config.global_settings (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── WHAT GETS PUSHED INTO THE CLIENT DB ──────────────────────────────────────
+-- When CimplrAdmin syncs a deployment, it creates these two flat tables
+-- in the CLIENT'S own Postgres database (no admin_svc references):
+--
+--   config.permissions
+--     module      TEXT
+--     sub_module  TEXT
+--     action      TEXT
+--     is_allowed  BOOLEAN
+--     synced_at   TIMESTAMPTZ
+--     UNIQUE(module, sub_module, action)
+--
+--   config.settings   (flat key/value — no deployment_id, no FK)
+--     key        TEXT PRIMARY KEY
+--     value      TEXT
+--     synced_at  TIMESTAMPTZ
+--
+--   Keys written by CimplrAdmin into client config.settings:
+--     licence_status          → 'ACTIVE' | 'GRACE' | 'EXPIRED' | 'NONE'
+--     licence_expires_at      → ISO-8601 timestamp
+--     deployment_is_active    → 'true' | 'false'

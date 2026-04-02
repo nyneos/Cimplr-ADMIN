@@ -103,6 +103,9 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	mux.Handle("/cimplrADMIN/access/permission/bulk-set",       wrap(deps.Access.PermissionBulkSet))
 	mux.Handle("/cimplrADMIN/access/permission/get",            wrap(deps.Access.PermissionGet))
 	mux.Handle("/cimplrADMIN/access/deployment/assign-package", wrap(deps.Access.AssignPackage))
+	mux.Handle("/cimplrADMIN/access/deployment/sync",           wrap(deps.Access.SyncDeployment))
+	mux.Handle("/cimplrADMIN/access/deployment/sync-all",       wrap(deps.Access.SyncAll))
+	mux.Handle("/cimplrADMIN/access/deployment/permissions",    noAuth(deps.Access.GetAllPermissions))
 	// Fast check endpoint — no session required
 	mux.Handle("/cimplrADMIN/access/check", noAuth(deps.Access.Check))
 
