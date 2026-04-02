@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: cimplr-admin
+    runtime: go
+    region: singapore
+    plan: starter
+    buildCommand: go build -o CimplrAdmin ./cmd/server/main.go
+    startCommand: ./CimplrAdmin
+    healthCheckPath: /cimplrADMIN/health
+    envVars:
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        value: postgres
+      - key: PORT
+        value: "8080"
+      - key: MASTER_KEY
+        generateValue: true
+      - key: SEND_ENDPOINT_URL
+        sync: false
+      - key: SEND_ENDPOINT_API_KEY
+        sync: false
+      - key: OUTBOX_WORKER_ENABLED
+        value: "true"
+      - key: OUTBOX_WORKER_POLL_SECS
+        value: "10"
+      - key: OUTBOX_WORKER_BATCH_SIZE
+        value: "50"
+      - key: OUTBOX_WORKER_TIMEOUT_SECS
+        value: "15"
+      - key: LICENCE_CHECKER_ENABLED
+        value: "true"
+      - key: LICENCE_CHECKER_POLL_HOURS
+        value: "24"
