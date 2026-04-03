@@ -110,11 +110,15 @@ func SyncPermissionsToDeployment(ctx context.Context, adminPool *pgxpool.Pool, d
 			synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 			UNIQUE(module, sub_module, action)
 		)`,
+		// Migrate existing permissions tables that were created before synced_at was added
+		`ALTER TABLE config.permissions ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
 		`CREATE TABLE IF NOT EXISTS config.settings (
 			key        TEXT PRIMARY KEY,
 			value      TEXT NOT NULL,
 			synced_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
+		// Migrate existing settings tables that were created before synced_at was added
+		`ALTER TABLE config.settings ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
 	} {
 		if _, err := clientPool.Exec(ctx, ddl); err != nil {
 			return &SyncResult{

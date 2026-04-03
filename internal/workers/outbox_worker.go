@@ -134,7 +134,8 @@ func dispatchMessage(ctx context.Context, pool *pgxpool.Pool, client *http.Clien
 		Subject:        o.RenderedSubject,
 		Body:           o.RenderedBody,
 	}
-	body, _ := json.Marshal(payload)
+	// Endpoint expects an array — wrap single message in []
+	body, _ := json.Marshal([]sendPayload{payload})
 
 	var providerResp, providerMsgID, lastErr string
 	var finalStatus string

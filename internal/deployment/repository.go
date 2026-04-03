@@ -57,11 +57,16 @@ func (r *Repository) Create(ctx context.Context, d *Deployment, createdBy string
 func (r *Repository) GetByID(ctx context.Context, id string) (*Deployment, error) {
 	d := &Deployment{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT deployment_id::text, company_name, company_email, company_phone,
-		        contact_person, company_address, db_user, db_password, db_host, db_port,
-		        db_name, db_url, status, is_active, created_by::text, approved_by::text,
-		        approved_at, created_at, updated_at
-		 FROM admin_svc.deployments WHERE deployment_id=$1`, id).
+		`SELECT d.deployment_id::text, d.company_name, d.company_email, d.company_phone,
+		        d.contact_person, d.company_address, d.db_user, d.db_password, d.db_host, d.db_port,
+		        d.db_name, d.db_url, d.status, d.is_active,
+		        COALESCE(uc.username, CASE WHEN d.created_by IS NULL THEN 'MASTER' END),
+		        COALESCE(ua.username, CASE WHEN d.approved_by IS NULL AND d.approved_at IS NOT NULL THEN 'MASTER' END),
+		        d.approved_at, d.created_at, d.updated_at
+		 FROM admin_svc.deployments d
+		 LEFT JOIN admin_svc.users uc ON uc.user_id = d.created_by
+		 LEFT JOIN admin_svc.users ua ON ua.user_id = d.approved_by
+		 WHERE d.deployment_id=$1`, id).
 		Scan(&d.DeploymentID, &d.CompanyName, &d.CompanyEmail, &d.CompanyPhone,
 			&d.ContactPerson, &d.CompanyAddress, &d.DBUser, &d.DBPassword, &d.DBHost, &d.DBPort,
 			&d.DBName, &d.DBURL, &d.Status, &d.IsActive, &d.CreatedBy, &d.ApprovedBy,
@@ -79,20 +84,20 @@ func (r *Repository) GetByID(ctx context.Context, id string) (*Deployment, error
 func (r *Repository) List(ctx context.Context, status string) ([]*Deployment, error) {
 	var rows pgx.Rows
 	var err error
+	const deploymentSelect = `
+		SELECT d.deployment_id::text, d.company_name, d.company_email, d.company_phone,
+		       d.contact_person, d.company_address, d.db_user, d.db_password, d.db_host, d.db_port,
+		       d.db_name, d.db_url, d.status, d.is_active,
+		       COALESCE(uc.username, CASE WHEN d.created_by IS NULL THEN 'MASTER' END),
+		       COALESCE(ua.username, CASE WHEN d.approved_by IS NULL AND d.approved_at IS NOT NULL THEN 'MASTER' END),
+		       d.approved_at, d.created_at, d.updated_at
+		FROM admin_svc.deployments d
+		LEFT JOIN admin_svc.users uc ON uc.user_id = d.created_by
+		LEFT JOIN admin_svc.users ua ON ua.user_id = d.approved_by`
 	if status == "" {
-		rows, err = r.pool.Query(ctx,
-			`SELECT deployment_id::text, company_name, company_email, company_phone,
-			        contact_person, company_address, db_user, db_password, db_host, db_port,
-			        db_name, db_url, status, is_active, created_by::text, approved_by::text,
-			        approved_at, created_at, updated_at
-			 FROM admin_svc.deployments ORDER BY created_at DESC`)
+		rows, err = r.pool.Query(ctx, deploymentSelect+` ORDER BY d.created_at DESC`)
 	} else {
-		rows, err = r.pool.Query(ctx,
-			`SELECT deployment_id::text, company_name, company_email, company_phone,
-			        contact_person, company_address, db_user, db_password, db_host, db_port,
-			        db_name, db_url, status, is_active, created_by::text, approved_by::text,
-			        approved_at, created_at, updated_at
-			 FROM admin_svc.deployments WHERE status=$1 ORDER BY created_at DESC`, status)
+		rows, err = r.pool.Query(ctx, deploymentSelect+` WHERE d.status=$1 ORDER BY d.created_at DESC`, status)
 	}
 	if err != nil {
 		return nil, err

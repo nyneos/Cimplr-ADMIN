@@ -52,11 +52,19 @@ func (r *Repository) Renew(ctx context.Context, licenceID string, newExpiresAt t
 	return err
 }
 
+const licenceSelect = `
+	SELECT l.licence_id::text, l.deployment_id::text, l.starts_at, l.expires_at, l.grace_days, l.status,
+	       l.notified_expiry, l.notified_grace,
+	       COALESCE(uc.username, CASE WHEN l.created_by IS NULL THEN 'MASTER' END),
+	       COALESCE(ur.username, CASE WHEN l.renewed_by IS NULL AND l.renewed_at IS NOT NULL THEN 'MASTER' END),
+	       l.renewed_at, l.created_at, l.updated_at
+	FROM admin_svc.licences l
+	LEFT JOIN admin_svc.users uc ON uc.user_id = l.created_by
+	LEFT JOIN admin_svc.users ur ON ur.user_id = l.renewed_by`
+
 func (r *Repository) GetByDeployment(ctx context.Context, deploymentID string) ([]*Licence, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT licence_id::text, deployment_id::text, starts_at, expires_at, grace_days, status,
-		        notified_expiry, notified_grace, created_by::text, renewed_by::text, renewed_at, created_at, updated_at
-		 FROM admin_svc.licences WHERE deployment_id=$1 ORDER BY created_at DESC`, deploymentID)
+		licenceSelect+` WHERE l.deployment_id=$1 ORDER BY l.created_at DESC`, deploymentID)
 	if err != nil {
 		return nil, err
 	}
@@ -68,15 +76,9 @@ func (r *Repository) List(ctx context.Context, status string) ([]*Licence, error
 	var rows pgx.Rows
 	var err error
 	if status == "" {
-		rows, err = r.pool.Query(ctx,
-			`SELECT licence_id::text, deployment_id::text, starts_at, expires_at, grace_days, status,
-			        notified_expiry, notified_grace, created_by::text, renewed_by::text, renewed_at, created_at, updated_at
-			 FROM admin_svc.licences ORDER BY created_at DESC`)
+		rows, err = r.pool.Query(ctx, licenceSelect+` ORDER BY l.created_at DESC`)
 	} else {
-		rows, err = r.pool.Query(ctx,
-			`SELECT licence_id::text, deployment_id::text, starts_at, expires_at, grace_days, status,
-			        notified_expiry, notified_grace, created_by::text, renewed_by::text, renewed_at, created_at, updated_at
-			 FROM admin_svc.licences WHERE status=$1 ORDER BY created_at DESC`, status)
+		rows, err = r.pool.Query(ctx, licenceSelect+` WHERE l.status=$1 ORDER BY l.created_at DESC`, status)
 	}
 	if err != nil {
 		return nil, err
