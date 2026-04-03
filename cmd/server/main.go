@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,6 +20,31 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
+
+// atomicHandler serves requests before the DB is ready (health = "starting"),
+// then atomically swaps in the real mux once DB + migrations are done.
+type atomicHandler struct {
+	v atomic.Pointer[http.ServeMux]
+}
+
+func (a *atomicHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if mux := a.v.Load(); mux != nil {
+		mux.ServeHTTP(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/cimplrADMIN/health" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "starting", "db": "connecting", "time": time.Now().UTC(),
+		})
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": false, "error": "service_starting", "message": "server is starting, please retry",
+	})
+}
 
 func main() {
 	// ── Logger ────────────────────────────────────────────────────────────────
@@ -33,70 +60,23 @@ func main() {
 	applogger.SetGlobalLogger(logSvc)
 
 	// ── Config ────────────────────────────────────────────────────────────────
-	_ = godotenv.Load() // silently ignored if .env is missing in production
+	_ = godotenv.Load()
 	cfg := config.Load()
 
 	// ── Root context with graceful shutdown ───────────────────────────────────
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// ── Database ──────────────────────────────────────────────────────────────
-	// Retry with exponential backoff so a transient network hiccup at startup
-	// doesn't hard-crash the app and cause a restart loop on Render.
-	var pool *pgxpool.Pool
-	{
-		var err error
-		backoff := 5 * time.Second
-		for attempt := 1; attempt <= 6; attempt++ {
-			pool, err = db.NewPool(rootCtx, cfg.DSN())
-			if err == nil {
-				break
-			}
-			log.Printf("failed to connect to database (attempt %d/6): %v", attempt, err)
-			if attempt == 6 {
-				log.Fatalf("giving up after 6 attempts: %v", err)
-			}
-			select {
-			case <-rootCtx.Done():
-				log.Fatalf("context cancelled before DB connected: %v", rootCtx.Err())
-			case <-time.After(backoff):
-			}
-			backoff *= 2 // 5s → 10s → 20s → 40s → 80s
-		}
-	}
-	defer pool.Close()
-	log.Println("database connected")
-
-	// ── Migrations ────────────────────────────────────────────────────────────
-	if err := db.Migrate(rootCtx, pool); err != nil {
-		log.Fatalf("migration failed: %v", err)
-	}
-	log.Println("migrations applied")
-
-	// ── Background workers ────────────────────────────────────────────────────
-	if cfg.OutboxWorkerEnabled {
-		go workers.StartOutboxWorker(rootCtx, pool,
-			cfg.OutboxPollSecs, cfg.OutboxBatchSize, cfg.OutboxTimeoutSecs)
-	}
-	if cfg.LicenceCheckerEnabled {
-		go workers.StartLicenceChecker(rootCtx, pool, cfg.LicenceCheckerPollHours)
-	}
-	go workers.StartIntegrityChecker(rootCtx, pool)
-
-	// ── HTTP server ───────────────────────────────────────────────────────────
-	mux := http.NewServeMux()
-	deps := api.NewDependencies(pool)
-	api.RegisterRoutes(mux, deps)
-
+	// ── HTTP server starts IMMEDIATELY ────────────────────────────────────────
+	// Render detects port 8080 right away. Real routes swap in once DB is ready.
+	handler := &atomicHandler{}
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-
-	// Start server in goroutine
 	go func() {
 		log.Printf("CimplrAdmin listening on :%s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -104,19 +84,73 @@ func main() {
 		}
 	}()
 
-	// ── Graceful shutdown ────────────────────────────────────────────────────
+	// ── Database + migrations + workers (non-blocking) ────────────────────────
+	go func() {
+		var pool *pgxpool.Pool
+		var err error
+		backoff := 10 * time.Second
+		for attempt := 1; attempt <= 10; attempt++ {
+			// Per-attempt timeout independent of rootCtx — a slow Supabase
+			// pooler handshake won't cancel the whole retry chain.
+			attemptCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			pool, err = db.NewPool(attemptCtx, cfg.DSN())
+			cancel()
+			if err == nil {
+				break
+			}
+			log.Printf("[db] connect attempt %d/10 failed: %v", attempt, err)
+			select {
+			case <-rootCtx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 60*time.Second {
+				backoff *= 2
+			}
+		}
+		if err != nil {
+			log.Printf("[db] giving up after 10 attempts — running degraded: %v", err)
+			return
+		}
+		log.Println("database connected")
+
+		migCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		migErr := db.Migrate(migCtx, pool)
+		cancel()
+		if migErr != nil {
+			log.Printf("[db] migration failed: %v", migErr)
+			return
+		}
+		log.Println("migrations applied")
+
+		// Swap in the real mux — all routes now live
+		mux := http.NewServeMux()
+		deps := api.NewDependencies(pool)
+		api.RegisterRoutes(mux, deps)
+		handler.v.Store(mux)
+
+		// ── Background workers ────────────────────────────────────────────────
+		if cfg.OutboxWorkerEnabled {
+			go workers.StartOutboxWorker(rootCtx, pool,
+				cfg.OutboxPollSecs, cfg.OutboxBatchSize, cfg.OutboxTimeoutSecs)
+		}
+		if cfg.LicenceCheckerEnabled {
+			go workers.StartLicenceChecker(rootCtx, pool, cfg.LicenceCheckerPollHours)
+		}
+		go workers.StartIntegrityChecker(rootCtx, pool)
+	}()
+
+	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	<-rootCtx.Done()
 	log.Println("shutdown signal received, draining...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server shutdown error: %v", err)
 	}
 	log.Println("CimplrAdmin stopped")
 
-	// Print master key warning if not set
 	if os.Getenv("MASTER_KEY") == "" {
 		log.Println("WARNING: MASTER_KEY is not set — emergency master access is disabled")
 	}
