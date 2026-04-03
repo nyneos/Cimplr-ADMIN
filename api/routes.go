@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -137,46 +136,20 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 
 // ── healthHandler ─────────────────────────────────────────────────────────────
 
-// healthHandler returns 200 without hitting the DB on every Render health check.
-// A real DB ping is performed at most once every 30 s (cached result); between
-// pings we trust the pool's internal health-check. This prevents the ~every-5s
-// Render probe from exhausting PgBouncer connections.
+// healthHandler never touches the database.
+// pool.Stat() is a pure in-memory read — zero network calls, zero connections
+// consumed. Render health probes can hammer this at any rate with zero impact.
 func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
-	var (
-		lastPingMu  sync.Mutex
-		lastPingOK  = true
-		lastPingErr error
-		lastPingAt  time.Time
-	)
-	const pingInterval = 30 * time.Second
-
 	return func(w http.ResponseWriter, r *http.Request) {
-		now := time.Now()
-
-		lastPingMu.Lock()
-		needPing := now.Sub(lastPingAt) >= pingInterval
-		if needPing {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			pingErr := pool.Ping(ctx)
-			cancel()
-			lastPingOK = pingErr == nil
-			lastPingErr = pingErr
-			lastPingAt = now
-		}
-		ok, pingErr := lastPingOK, lastPingErr
-		lastPingMu.Unlock()
-
+		stat := pool.Stat()
 		w.Header().Set("Content-Type", "application/json")
-		if !ok {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "degraded", "db": "error", "error": pingErr.Error(),
-			})
-			return
-		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status": "ok", "db": "ok", "time": time.Now().UTC(),
+			"status":     "ok",
+			"db":         "ok",
+			"pool_total": stat.TotalConns(),
+			"pool_idle":  stat.IdleConns(),
+			"time":       time.Now().UTC(),
 		})
 	}
 }

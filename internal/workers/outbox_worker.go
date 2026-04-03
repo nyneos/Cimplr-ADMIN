@@ -46,7 +46,10 @@ type outboxRow struct {
 }
 
 func processOutboxBatch(ctx context.Context, pool *pgxpool.Pool, batchSize, timeoutSecs int) {
-	dbCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Use a fresh background context for all DB operations — independent of the
+	// worker shutdown context. This prevents Render's graceful-shutdown SIGTERM
+	// from aborting an in-flight transaction mid-write.
+	dbCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	tx, err := pool.Begin(dbCtx)
