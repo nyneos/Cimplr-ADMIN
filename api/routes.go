@@ -67,14 +67,10 @@ func NewDependencies(pool *pgxpool.Pool) *Dependencies {
 func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	sessionMW := auth.RequireSession(deps.SessionStore)
 	wrap := func(h http.HandlerFunc) http.Handler {
-		// detachCtx runs AFTER session auth — it replaces r.Context() with a
-		// fresh background-based context so that HTTP client disconnects /
-		// Render load-balancer timeouts never cancel in-flight DB queries.
-		return recovery(logging(sessionMW(detachCtx(h))))
+		return cors(recovery(logging(sessionMW(detachCtx(h)))))
 	}
 	noAuth := func(h http.HandlerFunc) http.Handler {
-		// noAuth routes (health, login) also get detached DB contexts.
-		return recovery(logging(detachCtx(h)))
+		return cors(recovery(logging(detachCtx(h))))
 	}
 
 	// ── Health ──────────────────────────────────────────────────────────────
@@ -155,6 +151,21 @@ func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
 }
 
 // ── Middleware helpers ────────────────────────────────────────────────────────
+
+// cors sets permissive CORS headers and short-circuits OPTIONS preflight requests.
+func cors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Session-Token, X-Master-Key, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // detachCtx replaces r.Context() with a context.WithoutCancel copy so that
 // HTTP-level cancellations (client disconnect, Render LB timeout) cannot abort
