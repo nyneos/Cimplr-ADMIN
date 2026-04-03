@@ -2,15 +2,16 @@ services:
   - type: web
     name: cimplr-admin
     runtime: go
-    region: singapore
+    region: oregon
     plan: starter
-    buildCommand: go build -o CimplrAdmin ./cmd/server/main.go
-    startCommand: ./CimplrAdmin
+    buildCommand: go build -tags netgo -ldflags '-s -w' -o app ./cmd/server/main.go
+    startCommand: ./app
     healthCheckPath: /cimplrADMIN/health
     envVars:
       # ── Database (Supabase) ────────────────────────────────────────────────
+      # Using session-mode pooler (port 5432) with direct URL
       - key: DATABASE_URL
-        value: postgres://postgres.zksyhgkeyisnxwvapxqx:nyneos123@aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=15
+        value: postgres://postgres.zksyhgkeyisnxwvapxqx:nyneos123@aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=30&pool_mode=session
       - key: DB_USER
         value: postgres.zksyhgkeyisnxwvapxqx
       - key: DB_PASSWORD

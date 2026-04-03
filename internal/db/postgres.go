@@ -32,7 +32,7 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("db: connect: %w", err)
 	}
 
-	pingCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		return nil, fmt.Errorf("db: ping: %w", err)
