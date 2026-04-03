@@ -2,15 +2,20 @@ package db
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// migrationSQL is baked into the binary at compile time.
+// No file-system access needed at runtime — works on Render, Docker, etc.
+//
+//go:embed 001_init.sql
+var migrationSQL string
+
 // NewPool creates a pgxpool connection pool using the provided DSN.
-// MaxConns=50, MinConns=5, MaxConnLifetime=30m as per production spec.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -27,29 +32,27 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("db: connect: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	pingCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	return pool, nil
 }
 
-// Migrate runs the SQL migration file against the database.
-// It reads migrations/001_init.sql relative to the working directory.
+// Migrate runs the embedded SQL migration against the database.
+// The SQL uses CREATE TABLE IF NOT EXISTS throughout, so it is safe to re-run.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	data, err := os.ReadFile("migrations/001_init.sql")
-	if err != nil {
-		return fmt.Errorf("db: read migration: %w", err)
-	}
-
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("db: acquire conn for migration: %w", err)
 	}
 	defer conn.Release()
 
-	_, err = conn.Exec(ctx, string(data))
+	_, err = conn.Exec(ctx, migrationSQL)
 	if err != nil {
 		return fmt.Errorf("db: run migration: %w", err)
 	}
 	return nil
 }
+
