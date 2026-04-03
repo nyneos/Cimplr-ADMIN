@@ -72,13 +72,15 @@ func Load() *Config {
 }
 
 // DSN returns the PostgreSQL connection string. DATABASE_URL takes precedence.
+// Supabase transaction pooler requires URL format (not keyword format) and
+// connect_timeout to avoid 'context deadline exceeded' on cold starts.
 func (c *Config) DSN() string {
 	if c.DatabaseURL != "" {
 		return c.DatabaseURL
 	}
 	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=require",
-		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName,
+		"postgres://%s:%s@%s:%s/%s?sslmode=require&connect_timeout=15",
+		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName,
 	)
 }
 

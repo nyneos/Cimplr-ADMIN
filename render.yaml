@@ -9,6 +9,8 @@ services:
     healthCheckPath: /cimplrADMIN/health
     envVars:
       # ── Database (Supabase) ────────────────────────────────────────────────
+      - key: DATABASE_URL
+        value: postgres://postgres.zksyhgkeyisnxwvapxqx:nyneos123@aws-1-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require&connect_timeout=15
       - key: DB_USER
         value: postgres.zksyhgkeyisnxwvapxqx
       - key: DB_PASSWORD
