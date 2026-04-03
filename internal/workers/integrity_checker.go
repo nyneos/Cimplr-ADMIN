@@ -61,6 +61,7 @@ func StartIntegrityChecker(ctx context.Context, pool *pgxpool.Pool) {
 
 // runIntegrityCheck iterates every APPROVED deployment and checks each one.
 func runIntegrityCheck(ctx context.Context, pool *pgxpool.Pool) {
+	workerAudit(pool, "SYSTEM", "integrity_checker", "CHECK_STARTED", nil, map[string]any{"time": time.Now().UTC()})
 	log.Println("[integrity_checker] running checks")
 
 	type deploymentRow struct {
@@ -98,6 +99,8 @@ func runIntegrityCheck(ctx context.Context, pool *pgxpool.Pool) {
 				d.DBUser, d.DBPassword, d.DBHost, d.DBPort, d.DBName))
 	}
 	log.Printf("[integrity_checker] done — checked %d deployment(s)", len(deployments))
+	workerAudit(pool, "SYSTEM", "integrity_checker", "CHECK_COMPLETED",
+		nil, map[string]any{"deployments_checked": len(deployments), "time": time.Now().UTC()})
 }
 
 type permKey struct {
@@ -181,6 +184,8 @@ func checkDeployment(ctx context.Context, adminPool *pgxpool.Pool, deploymentID,
 	}
 
 	if len(tampers) == 0 {
+		workerAudit(adminPool, "DEPLOYMENT", deploymentID, "INTEGRITY_CHECK_CLEAN",
+			nil, map[string]any{"company": companyName, "perms_checked": len(authoritative)})
 		return // clean
 	}
 

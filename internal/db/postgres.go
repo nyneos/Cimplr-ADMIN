@@ -21,11 +21,11 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	cfg.MaxConns = 10
-	cfg.MinConns = 2
-	cfg.MaxConnLifetime = 30 * time.Minute
-	cfg.MaxConnIdleTime = 25 * time.Second // recycle before Supabase PgBouncer kills idle @ ~30s
-	cfg.HealthCheckPeriod = 15 * time.Second // detect dead conns quickly
+	cfg.MaxConns = 5                          // Supabase free tier: max 15 total, keep headroom
+	cfg.MinConns = 0                          // no persistent idle conns — PgBouncer kills them anyway
+	cfg.MaxConnLifetime = 5 * time.Minute     // recycle proactively before PgBouncer cuts us off
+	cfg.MaxConnIdleTime = 20 * time.Second    // drop idle before PgBouncer kills at ~30s
+	cfg.HealthCheckPeriod = 30 * time.Second  // don't hammer PgBouncer with keep-alive pings
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

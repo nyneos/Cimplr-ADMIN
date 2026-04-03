@@ -158,6 +158,9 @@ func dispatchMessage(ctx context.Context, pool *pgxpool.Pool, client *http.Clien
 				lastErr = err.Error()
 				finalStatus = markRetryOrDead(ctx, pool, o)
 				recordHistory(ctx, pool, o, finalStatus, lastErr, "", o.RetryCount+1)
+				workerAudit(pool, "EMAIL", o.OutboxID, "EMAIL_DISPATCH_ERROR",
+					map[string]any{"retry_count": o.RetryCount},
+					map[string]any{"event_id": o.EventID, "recipient": o.RecipientEmail, "error": lastErr, "new_status": finalStatus})
 				return
 			}
 			respBody, _ := io.ReadAll(resp.Body)
@@ -179,10 +182,16 @@ func dispatchMessage(ctx context.Context, pool *pgxpool.Pool, client *http.Clien
 		_, _ = pool.Exec(dbCtx,
 			`UPDATE admin_svc.outbox SET processing_status='SENT', sent_at=now(), retry_count=$2
 			 WHERE outbox_id=$1`, o.OutboxID, o.RetryCount+1)
+		workerAudit(pool, "EMAIL", o.OutboxID, "EMAIL_SENT",
+			map[string]any{"processing_status": "PROCESSING", "retry_count": o.RetryCount},
+			map[string]any{"processing_status": "SENT", "event_id": o.EventID, "recipient": o.RecipientEmail, "attempt": o.RetryCount + 1})
 	} else {
 		_, _ = pool.Exec(dbCtx,
 			`UPDATE admin_svc.outbox SET processing_status=$2, retry_count=$3, last_error=$4
 			 WHERE outbox_id=$1`, o.OutboxID, finalStatus, o.RetryCount+1, lastErr)
+		workerAudit(pool, "EMAIL", o.OutboxID, "EMAIL_"+finalStatus,
+			map[string]any{"processing_status": "PROCESSING", "retry_count": o.RetryCount},
+			map[string]any{"processing_status": finalStatus, "event_id": o.EventID, "recipient": o.RecipientEmail, "attempt": o.RetryCount + 1, "error": lastErr})
 	}
 	recordHistory(dbCtx, pool, o, finalStatus, lastErr, providerMsgID+providerResp, o.RetryCount+1)
 }

@@ -36,16 +36,21 @@ func runLicenceCheck(ctx context.Context, pool *pgxpool.Pool) {
 	dbCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
+	workerAudit(pool, "SYSTEM", "licence_checker", "CHECK_STARTED", nil, map[string]any{"time": time.Now().UTC()})
 	log.Println("[licence_checker] running checks")
 	if err := stepExpiryWarning(dbCtx, pool); err != nil {
 		log.Printf("[licence_checker] expiry_warning: %v", err)
+		workerAudit(pool, "SYSTEM", "licence_checker", "STEP_ERROR", nil, map[string]any{"step": "expiry_warning", "error": err.Error()})
 	}
 	if err := stepGracePeriod(dbCtx, pool); err != nil {
 		log.Printf("[licence_checker] grace_period: %v", err)
+		workerAudit(pool, "SYSTEM", "licence_checker", "STEP_ERROR", nil, map[string]any{"step": "grace_period", "error": err.Error()})
 	}
 	if err := stepFullSuspension(dbCtx, pool); err != nil {
 		log.Printf("[licence_checker] suspension: %v", err)
+		workerAudit(pool, "SYSTEM", "licence_checker", "STEP_ERROR", nil, map[string]any{"step": "full_suspension", "error": err.Error()})
 	}
+	workerAudit(pool, "SYSTEM", "licence_checker", "CHECK_COMPLETED", nil, map[string]any{"time": time.Now().UTC()})
 }
 
 // stepExpiryWarning notifies when licence expires within 7 days.
@@ -98,6 +103,14 @@ func stepExpiryWarning(ctx context.Context, pool *pgxpool.Pool) error {
 		_, _ = pool.Exec(ctx,
 			`UPDATE admin_svc.licences SET notified_expiry=true, updated_at=now() WHERE licence_id=$1`,
 			l.LicenceID)
+		workerAudit(pool, "LICENCE", l.LicenceID, "EXPIRY_WARNING_SENT",
+			map[string]any{"notified_expiry": false},
+			map[string]any{
+				"notified_expiry": true,
+				"expires_at":      l.ExpiresAt.Format(time.RFC3339),
+				"company":         companyName,
+				"recipients":      len(users),
+			})
 	}
 	return nil
 }
@@ -137,6 +150,14 @@ func stepGracePeriod(ctx context.Context, pool *pgxpool.Pool) error {
 			 SET status='GRACE', notified_grace=true, updated_at=now()
 			 WHERE licence_id=$1`, l.LicenceID)
 
+		workerAudit(pool, "LICENCE", l.LicenceID, "GRACE_TRANSITION",
+			map[string]any{"status": "ACTIVE"},
+			map[string]any{
+				"status":     "GRACE",
+				"expired_at": l.ExpiresAt.Format(time.RFC3339),
+				"grace_days": l.GraceDays,
+			})
+
 		// Push updated licence status to the deployment's own DB.
 		go func(did string) { access.SyncPermissionsToDeployment(context.Background(), pool, did) }(l.DeploymentID) //nolint:errcheck
 
@@ -156,6 +177,9 @@ func stepGracePeriod(ctx context.Context, pool *pgxpool.Pool) error {
 				},
 			})
 		}
+		workerAudit(pool, "DEPLOYMENT", l.DeploymentID, "GRACE_NOTIFICATION_SENT",
+			nil,
+			map[string]any{"licence_id": l.LicenceID, "recipients": len(users), "company": companyName})
 	}
 	return nil
 }
@@ -192,16 +216,24 @@ func stepFullSuspension(ctx context.Context, pool *pgxpool.Pool) error {
 		_, _ = pool.Exec(ctx,
 			`UPDATE admin_svc.licences SET status='EXPIRED', updated_at=now() WHERE licence_id=$1`,
 			l.LicenceID)
+		workerAudit(pool, "LICENCE", l.LicenceID, "EXPIRED",
+			map[string]any{"status": "GRACE"},
+			map[string]any{"status": "EXPIRED", "reason": "grace_period_exhausted"})
 
 		// Suspend deployment
 		_, _ = pool.Exec(ctx,
 			`UPDATE admin_svc.deployments SET is_active=false, updated_at=now() WHERE deployment_id=$1`,
 			l.DeploymentID)
+		workerAudit(pool, "DEPLOYMENT", l.DeploymentID, "SUSPENDED",
+			map[string]any{"is_active": true},
+			map[string]any{"is_active": false, "reason": "licence_expired", "licence_id": l.LicenceID})
 
 		// Push EXPIRED status to the deployment's own DB.
 		go func(did string) { access.SyncPermissionsToDeployment(context.Background(), pool, did) }(l.DeploymentID) //nolint:errcheck
+		workerAudit(pool, "DEPLOYMENT", l.DeploymentID, "SYNC_TRIGGERED",
+			nil, map[string]any{"trigger": "licence_expired", "licence_id": l.LicenceID})
 
-		// Audit
+		// Audit (legacy inline — kept for backward compat)
 		_, _ = pool.Exec(ctx,
 			`INSERT INTO admin_svc.audit_log(entity_type,entity_id,action,new_value)
 			 VALUES('LICENCE',$1,'EXPIRED',$2)`,
@@ -222,6 +254,8 @@ func stepFullSuspension(ctx context.Context, pool *pgxpool.Pool) error {
 				},
 			})
 		}
+		workerAudit(pool, "DEPLOYMENT", l.DeploymentID, "EXPIRED_NOTIFICATION_SENT",
+			nil, map[string]any{"licence_id": l.LicenceID, "recipients": len(users), "company": companyName})
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -132,19 +133,40 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 
 // ── healthHandler ─────────────────────────────────────────────────────────────
 
+// healthHandler returns 200 without hitting the DB on every Render health check.
+// A real DB ping is performed at most once every 30 s (cached result); between
+// pings we trust the pool's internal health-check. This prevents the ~every-5s
+// Render probe from exhausting PgBouncer connections.
 func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
+	var (
+		lastPingMu  sync.Mutex
+		lastPingOK  = true
+		lastPingErr error
+		lastPingAt  time.Time
+	)
+	const pingInterval = 30 * time.Second
+
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Use a fresh background context — NOT r.Context() — so that Render's
-		// aggressive health-check HTTP cancellations don't cancel the DB ping
-		// and produce spurious 503s.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		now := time.Now()
+
+		lastPingMu.Lock()
+		needPing := now.Sub(lastPingAt) >= pingInterval
+		if needPing {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pingErr := pool.Ping(ctx)
+			cancel()
+			lastPingOK = pingErr == nil
+			lastPingErr = pingErr
+			lastPingAt = now
+		}
+		ok, pingErr := lastPingOK, lastPingErr
+		lastPingMu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		if err := pool.Ping(ctx); err != nil {
+		if !ok {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "degraded", "db": "error", "error": err.Error(),
+				"status": "degraded", "db": "error", "error": pingErr.Error(),
 			})
 			return
 		}
