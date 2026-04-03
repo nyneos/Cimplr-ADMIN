@@ -21,11 +21,14 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	cfg.MaxConns = 5                          // Supabase free tier: max 15 total, keep headroom
-	cfg.MinConns = 0                          // no persistent idle conns — PgBouncer kills them anyway
-	cfg.MaxConnLifetime = 5 * time.Minute     // recycle proactively before PgBouncer cuts us off
-	cfg.MaxConnIdleTime = 20 * time.Second    // drop idle before PgBouncer kills at ~30s
-	cfg.HealthCheckPeriod = 30 * time.Second  // don't hammer PgBouncer with keep-alive pings
+	cfg.MaxConns = 5                       // Supabase free tier: max 15 total, keep headroom
+	cfg.MinConns = 0                       // no persistent idle conns — PgBouncer kills them anyway
+	cfg.MaxConnLifetime = 4 * time.Minute  // recycle before PgBouncer's 5min server lifetime
+	cfg.MaxConnIdleTime = 15 * time.Second // drop idle well before PgBouncer kills at ~30s
+	cfg.HealthCheckPeriod = 0             // DISABLED: PgBouncer transaction mode breaks pgxpool
+	                                       // SELECT 1 health probes — connections look alive to
+	                                       // pgxpool but are already gone on PgBouncer's side.
+	                                       // MaxConnIdleTime + MaxConnLifetime handle recycling.
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

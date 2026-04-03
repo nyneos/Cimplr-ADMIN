@@ -78,8 +78,11 @@ func (c *Config) DSN() string {
 	if c.DatabaseURL != "" {
 		return c.DatabaseURL
 	}
+	// statement_cache_mode=describe: pgx v5 default uses prepared statements
+	// which PgBouncer transaction mode does NOT support. 'describe' uses
+	// the Describe message instead, compatible with transaction pooling.
 	return fmt.Sprintf(
-		"postgres://%s:%s@%s:%s/%s?sslmode=require&connect_timeout=15",
+		"postgres://%s:%s@%s:%s/%s?sslmode=require&connect_timeout=15&statement_cache_mode=describe",
 		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName,
 	)
 }

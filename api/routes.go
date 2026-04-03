@@ -68,10 +68,14 @@ func NewDependencies(pool *pgxpool.Pool) *Dependencies {
 func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	sessionMW := auth.RequireSession(deps.SessionStore)
 	wrap := func(h http.HandlerFunc) http.Handler {
-		return recovery(logging(sessionMW(h)))
+		// detachCtx runs AFTER session auth — it replaces r.Context() with a
+		// fresh background-based context so that HTTP client disconnects /
+		// Render load-balancer timeouts never cancel in-flight DB queries.
+		return recovery(logging(sessionMW(detachCtx(h))))
 	}
 	noAuth := func(h http.HandlerFunc) http.Handler {
-		return recovery(logging(http.HandlerFunc(h)))
+		// noAuth routes (health, login) also get detached DB contexts.
+		return recovery(logging(detachCtx(h)))
 	}
 
 	// ── Health ──────────────────────────────────────────────────────────────
@@ -178,6 +182,15 @@ func healthHandler(pool *pgxpool.Pool) http.HandlerFunc {
 }
 
 // ── Middleware helpers ────────────────────────────────────────────────────────
+
+// detachCtx replaces r.Context() with a context.WithoutCancel copy so that
+// HTTP-level cancellations (client disconnect, Render LB timeout) cannot abort
+// in-flight database queries. DB handlers must use their own timeouts.
+func detachCtx(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithoutCancel(r.Context())))
+	}
+}
 
 // recovery wraps a handler with panic recovery → 500.
 func recovery(next http.Handler) http.Handler {
