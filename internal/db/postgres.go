@@ -21,11 +21,11 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	cfg.MaxConns = 50
-	cfg.MinConns = 5
+	cfg.MaxConns = 10
+	cfg.MinConns = 2
 	cfg.MaxConnLifetime = 30 * time.Minute
-	cfg.MaxConnIdleTime = 10 * time.Minute
-	cfg.HealthCheckPeriod = 1 * time.Minute
+	cfg.MaxConnIdleTime = 25 * time.Second // recycle before Supabase PgBouncer kills idle @ ~30s
+	cfg.HealthCheckPeriod = 15 * time.Second // detect dead conns quickly
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

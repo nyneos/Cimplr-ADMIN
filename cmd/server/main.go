@@ -15,6 +15,7 @@ import (
 	applogger "CimplrCorpSaas/admin/internal/logger"
 	"CimplrCorpSaas/admin/internal/workers"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
@@ -40,9 +41,28 @@ func main() {
 	defer stop()
 
 	// ── Database ──────────────────────────────────────────────────────────────
-	pool, err := db.NewPool(rootCtx, cfg.DSN())
-	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+	// Retry with exponential backoff so a transient network hiccup at startup
+	// doesn't hard-crash the app and cause a restart loop on Render.
+	var pool *pgxpool.Pool
+	{
+		var err error
+		backoff := 5 * time.Second
+		for attempt := 1; attempt <= 6; attempt++ {
+			pool, err = db.NewPool(rootCtx, cfg.DSN())
+			if err == nil {
+				break
+			}
+			log.Printf("failed to connect to database (attempt %d/6): %v", attempt, err)
+			if attempt == 6 {
+				log.Fatalf("giving up after 6 attempts: %v", err)
+			}
+			select {
+			case <-rootCtx.Done():
+				log.Fatalf("context cancelled before DB connected: %v", rootCtx.Err())
+			case <-time.After(backoff):
+			}
+			backoff *= 2 // 5s → 10s → 20s → 40s → 80s
+		}
 	}
 	defer pool.Close()
 	log.Println("database connected")
