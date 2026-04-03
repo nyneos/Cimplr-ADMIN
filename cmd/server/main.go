@@ -81,6 +81,7 @@ func main() {
 	if cfg.LicenceCheckerEnabled {
 		go workers.StartLicenceChecker(rootCtx, pool, cfg.LicenceCheckerPollHours)
 	}
+	go workers.StartIntegrityChecker(rootCtx, pool)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	mux := http.NewServeMux()

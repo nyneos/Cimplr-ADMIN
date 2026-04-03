@@ -100,25 +100,25 @@ func SyncPermissionsToDeployment(ctx context.Context, adminPool *pgxpool.Pool, d
 	// ── 5. Ensure config schema + tables exist in client DB ───────────────────
 	// These are flat tables — no foreign keys, no references to admin_svc.
 	// They are owned by CimplrAdmin's sync process; the client app only reads them.
+	// We DROP and re-CREATE the tables every sync so we never fight with missing
+	// columns, missing constraints, or stale data from a previous partial sync.
 	for _, ddl := range []string{
 		`CREATE SCHEMA IF NOT EXISTS config`,
-		`CREATE TABLE IF NOT EXISTS config.permissions (
-			module      TEXT NOT NULL,
-			sub_module  TEXT NOT NULL DEFAULT 'default',
-			action      TEXT NOT NULL,
-			is_allowed  BOOLEAN NOT NULL DEFAULT FALSE,
-			synced_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-			UNIQUE(module, sub_module, action)
+		`DROP TABLE IF EXISTS config.settings`,
+		`CREATE TABLE config.settings (
+			key       TEXT PRIMARY KEY,
+			value     TEXT NOT NULL,
+			synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
-		// Migrate existing permissions tables that were created before synced_at was added
-		`ALTER TABLE config.permissions ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
-		`CREATE TABLE IF NOT EXISTS config.settings (
-			key        TEXT PRIMARY KEY,
-			value      TEXT NOT NULL,
-			synced_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		`DROP TABLE IF EXISTS config.permissions`,
+		`CREATE TABLE config.permissions (
+			module     TEXT NOT NULL,
+			sub_module TEXT NOT NULL DEFAULT 'default',
+			action     TEXT NOT NULL,
+			is_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+			synced_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (module, sub_module, action)
 		)`,
-		// Migrate existing settings tables that were created before synced_at was added
-		`ALTER TABLE config.settings ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
 	} {
 		if _, err := clientPool.Exec(ctx, ddl); err != nil {
 			return &SyncResult{
@@ -136,16 +136,11 @@ func SyncPermissionsToDeployment(ctx context.Context, adminPool *pgxpool.Pool, d
 	}
 	defer tx.Rollback(ctx)
 
-	// Clear existing permissions and replace with current snapshot
-	if _, err := tx.Exec(ctx, `DELETE FROM config.permissions`); err != nil {
-		return nil, fmt.Errorf("clearing permissions: %w", err)
-	}
+	// Tables were just re-created above — plain INSERT, no ON CONFLICT needed.
 	for _, p := range perms {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO config.permissions(module, sub_module, action, is_allowed, synced_at)
-			 VALUES($1,$2,$3,$4,now())
-			 ON CONFLICT(module, sub_module, action)
-			 DO UPDATE SET is_allowed=EXCLUDED.is_allowed, synced_at=now()`,
+			 VALUES($1,$2,$3,$4,now())`,
 			p.Module, p.SubModule, p.Action, p.IsAllowed)
 		if err != nil {
 			return nil, fmt.Errorf("inserting permission %s/%s/%s: %w", p.Module, p.SubModule, p.Action, err)
@@ -154,16 +149,13 @@ func SyncPermissionsToDeployment(ctx context.Context, adminPool *pgxpool.Pool, d
 
 	// ── 7. Write licence + deployment status settings ─────────────────────────
 	settings := map[string]string{
-		"licence_status":      licenceStatus,
-		"licence_expires_at":  expiresAt,
+		"licence_status":       licenceStatus,
+		"licence_expires_at":   expiresAt,
 		"deployment_is_active": fmt.Sprintf("%v", dsn.IsActive),
 	}
 	for k, v := range settings {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO config.settings(key, value, synced_at)
-			 VALUES($1,$2,now())
-			 ON CONFLICT(key)
-			 DO UPDATE SET value=EXCLUDED.value, synced_at=now()`,
+			`INSERT INTO config.settings(key, value, synced_at) VALUES($1,$2,now())`,
 			k, v)
 		if err != nil {
 			return nil, fmt.Errorf("writing setting %s: %w", k, err)

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"CimplrCorpSaas/admin/internal/access"
+	"CimplrCorpSaas/admin/internal/alert"
 	"CimplrCorpSaas/admin/internal/auth"
 	"CimplrCorpSaas/admin/internal/dashboard"
 	"CimplrCorpSaas/admin/internal/deployment"
@@ -33,6 +34,7 @@ type Dependencies struct {
 	Licence      *licence.Handler
 	Notification *notification.Handler
 	Dashboard    *dashboard.Handler
+	Alert        *alert.Handler
 }
 
 // NewDependencies wires all handlers from the pool.
@@ -57,6 +59,7 @@ func NewDependencies(pool *pgxpool.Pool) *Dependencies {
 		Licence:      licence.NewHandler(licence.NewService(pool)),
 		Notification: notification.NewHandler(pool),
 		Dashboard:    dashboard.NewHandler(pool),
+		Alert:        alert.NewHandler(pool),
 	}
 }
 
@@ -118,6 +121,10 @@ func RegisterRoutes(mux *http.ServeMux, deps *Dependencies) {
 	// ── Notifications ────────────────────────────────────────────────────────
 	mux.Handle("/cimplrADMIN/notification/list",   wrap(deps.Notification.ListSent))
 	mux.Handle("/cimplrADMIN/notification/resend", wrap(deps.Notification.Resend))
+
+	// ── Alerts ───────────────────────────────────────────────────────────────
+	mux.Handle("/cimplrADMIN/alerts/list",    wrap(deps.Alert.List))
+	mux.Handle("/cimplrADMIN/alerts/resolve", wrap(deps.Alert.Resolve))
 
 	// ── Dashboard ────────────────────────────────────────────────────────────
 	mux.Handle("/cimplrADMIN/dashboard/kpis", wrap(deps.Dashboard.KPIs))

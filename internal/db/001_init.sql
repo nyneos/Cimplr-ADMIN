@@ -179,39 +179,29 @@ VALUES
   ('DEPLOYMENT_APPROVED',    'EMAIL', 3,  60)
 ON CONFLICT (event_id, channel) DO NOTHING;
 
--- ── CONFIG SCHEMA (CimplrAdmin DB) ─────────────────────────────────────────
--- These tables live in the CimplrAdmin database only.
--- CimplrAdmin pushes a snapshot of these INTO the client deployment's own DB
--- via the sync worker. The client DB gets its own flat config.permissions and
--- config.settings tables with NO foreign-key references to admin_svc.
-CREATE SCHEMA IF NOT EXISTS config;
-
--- Per-deployment runtime settings stored in CimplrAdmin (source of truth)
-CREATE TABLE IF NOT EXISTS config.settings (
-    setting_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    deployment_id UUID REFERENCES admin_svc.deployments(deployment_id),
-    key           TEXT NOT NULL,
-    value         TEXT NOT NULL,
-    description   TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(deployment_id, key)
+-- ── 3H. ALERTS ───────────────────────────────────────────────────────────────
+-- Raised by the integrity checker worker when a client DB has tampered
+-- permissions, and by other system events that require admin attention.
+CREATE TABLE IF NOT EXISTS admin_svc.alerts (
+    alert_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_type     TEXT NOT NULL,          -- e.g. PERMISSION_TAMPERED, SYNC_FAILED
+    severity       TEXT NOT NULL DEFAULT 'WARNING', -- INFO | WARNING | CRITICAL
+    deployment_id  UUID REFERENCES admin_svc.deployments(deployment_id),
+    title          TEXT NOT NULL,
+    detail         JSONB,                  -- structured context (module, action, etc.)
+    is_resolved    BOOLEAN NOT NULL DEFAULT FALSE,
+    resolved_at    TIMESTAMPTZ,
+    resolved_by    UUID REFERENCES admin_svc.users(user_id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_config_settings_deployment ON config.settings(deployment_id);
-
--- Global settings (deployment_id IS NULL = applies to all)
-CREATE TABLE IF NOT EXISTS config.global_settings (
-    setting_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key         TEXT NOT NULL UNIQUE,
-    value       TEXT NOT NULL,
-    description TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+CREATE INDEX IF NOT EXISTS idx_alerts_unresolved   ON admin_svc.alerts(is_resolved, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_deployment   ON admin_svc.alerts(deployment_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_type         ON admin_svc.alerts(alert_type);
 
 -- ── WHAT GETS PUSHED INTO THE CLIENT DB ──────────────────────────────────────
--- When CimplrAdmin syncs a deployment, it creates these two flat tables
--- in the CLIENT'S own Postgres database (no admin_svc references):
+-- When CimplrAdmin syncs a deployment, the sync worker dynamically creates
+-- these two flat tables in the CLIENT'S own Postgres database.
+-- They are NOT created here — sync.go manages them at runtime.
 --
 --   config.permissions
 --     module      TEXT
@@ -221,7 +211,7 @@ CREATE TABLE IF NOT EXISTS config.global_settings (
 --     synced_at   TIMESTAMPTZ
 --     UNIQUE(module, sub_module, action)
 --
---   config.settings   (flat key/value — no deployment_id, no FK)
+--   config.settings   (flat key/value)
 --     key        TEXT PRIMARY KEY
 --     value      TEXT
 --     synced_at  TIMESTAMPTZ
